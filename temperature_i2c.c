@@ -1,4 +1,4 @@
-```
+
 /*
  * Problem statement:
  * Read ambient temperature from a BMP280 sensor over the I2C bus on a Raspberry Pi 4
@@ -84,7 +84,7 @@ int main(void) {
 
     // Try both I2C addresses
     printf("Scanning for BMP280/BME280...\n");
-    
+
     // Try primary address first
     printf("Trying address 0x%02X...\n", BMP280_I2C_ADDR_PRIMARY);
     i2c_fd = i2c_init(I2C_DEVICE, BMP280_I2C_ADDR_PRIMARY);
@@ -112,7 +112,7 @@ int main(void) {
     }
 
     // Not found at either address
-    fprintf(stderr, "\nERROR: BMP280/BME280 not detected at 0x%02X or 0x%02X\n", 
+    fprintf(stderr, "\nERROR: BMP280/BME280 not detected at 0x%02X or 0x%02X\n",
             BMP280_I2C_ADDR_PRIMARY, BMP280_I2C_ADDR_SECONDARY);
     fprintf(stderr, "Please check:\n");
     fprintf(stderr, "  1. Sensor power (VCC to 3.3V, GND to GND)\n");
@@ -208,9 +208,11 @@ static int i2c_init(const char *device, uint8_t addr) {
     return fd;
 }
 
+
 // Write a byte to a register
 static int i2c_write_byte(int fd, uint8_t reg, uint8_t value) {
     i2c_send_t hdr;
+    iov_t siov[2];
     uint8_t buf[2] = {reg, value};
 
     hdr.slave.addr = g_i2c_addr;
@@ -218,21 +220,22 @@ static int i2c_write_byte(int fd, uint8_t reg, uint8_t value) {
     hdr.len = 2;
     hdr.stop = 1;
 
-    if (devctl(fd, DCMD_I2C_SEND, &hdr, sizeof(hdr), NULL) != EOK) {
-        fprintf(stderr, "  devctl DCMD_I2C_SEND failed: %s\n", strerror(errno));
+    // Set up scatter-gather I/O vectors
+    SETIOV(&siov[0], &hdr, sizeof(hdr));
+    SETIOV(&siov[1], buf, 2);
+
+    if (devctlv(fd, DCMD_I2C_SEND, 2, 0, siov, NULL, NULL) != EOK) {
+        fprintf(stderr, "  i2c_write_byte failed: %s\n", strerror(errno));
         return -1;
     }
 
-    if (write(fd, buf, 2) != 2) {
-        perror("  i2c_write_byte");
-        return -1;
-    }
     return 0;
 }
 
 // Read bytes from a register
 static int i2c_read_bytes(int fd, uint8_t reg, uint8_t *buf, size_t len) {
     i2c_sendrecv_t hdr;
+    iov_t siov[2], riov[2];
 
     hdr.slave.addr = g_i2c_addr;
     hdr.slave.fmt = I2C_ADDRFMT_7BIT;
@@ -240,39 +243,37 @@ static int i2c_read_bytes(int fd, uint8_t reg, uint8_t *buf, size_t len) {
     hdr.recv_len = len;
     hdr.stop = 1;
 
-    if (devctl(fd, DCMD_I2C_SENDRECV, &hdr, sizeof(hdr), NULL) != EOK) {
-        fprintf(stderr, "  devctl DCMD_I2C_SENDRECV failed: %s\n", strerror(errno));
-        return -1;
-    }
+    // Set up send I/O vectors (header + register address)
+    SETIOV(&siov[0], &hdr, sizeof(hdr));
+    SETIOV(&siov[1], &reg, 1);
 
-    if (write(fd, &reg, 1) != 1) {
-        perror("  i2c_read_bytes: write register");
-        return -1;
-    }
+    // Set up receive I/O vectors (header + data buffer)
+    SETIOV(&riov[0], &hdr, sizeof(hdr));
+    SETIOV(&riov[1], buf, len);
 
-    ssize_t bytes_read = read(fd, buf, len);
-    if (bytes_read != (ssize_t)len) {
-        fprintf(stderr, "  i2c_read_bytes: read data failed (expected %zu, got %zd): %s\n", 
-                len, bytes_read, strerror(errno));
+    if (devctlv(fd, DCMD_I2C_SENDRECV, 2, 2, siov, riov, NULL) != EOK) {
+        fprintf(stderr, "  i2c_read_bytes failed: %s\n", strerror(errno));
         return -1;
     }
 
     return 0;
 }
 
+
+
 // Detect BMP280/BME280 by reading chip ID
 static int bmp280_detect(int fd) {
     uint8_t chip_id = 0;
-    
+
     printf("  Reading chip ID from register 0x%02X...\n", BMP280_REG_CHIP_ID);
-    
+
     if (i2c_read_bytes(fd, BMP280_REG_CHIP_ID, &chip_id, 1) < 0) {
         fprintf(stderr, "  Failed to read chip ID register\n");
         return -1;
     }
 
     printf("  Chip ID: 0x%02X ", chip_id);
-    
+
     if (chip_id == BMP280_CHIP_ID) {
         printf("(BMP280)\n");
         return 0;
@@ -373,4 +374,4 @@ static void timer_handler(int sig, siginfo_t *si, void *uc) {
         fprintf(stderr, "[%ld] Failed to read temperature\n", time(NULL));
     }
 }
-```
+
